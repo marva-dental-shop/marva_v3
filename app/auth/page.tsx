@@ -50,7 +50,10 @@ type TelegramWebApp = {
   close?: () => void;
   requestContact?: (callback?: (shared: boolean) => void) => void;
   showAlert?: (message: string) => void;
-  showConfirm?: (message: string, callback?: (confirmed: boolean) => void) => void;
+  showConfirm?: (
+    message: string,
+    callback?: (confirmed: boolean) => void
+  ) => void;
   HapticFeedback?: {
     notificationOccurred?: (type: "error" | "success" | "warning") => void;
     impactOccurred?: (
@@ -530,15 +533,16 @@ export default function AuthPage() {
     return data as CustomerRow | null;
   };
 
- const requestTelegramAutofill = async () => {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem("marva-logged-out");
-  }
+  const requestTelegramAutofill = async () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("marva-logged-out");
+    }
 
-  const tg = getTelegramWebApp();
-  const currentTgUser = getTelegramUserSafely();
+    const tg = getTelegramWebApp();
+    const currentTgUser = getTelegramUserSafely();
 
-  applyTelegramUser(currentTgUser, true);
+    applyTelegramUser(currentTgUser, true);
+
     if (!tg) {
       alert(
         lang === "uz"
@@ -569,12 +573,17 @@ export default function AuthPage() {
 
     if (customer) {
       applyCustomerRowToForm(customer);
+      localStorage.setItem("marva-user", JSON.stringify(toLocalUser(customer)));
 
       setTelegramStatus(
         lang === "uz"
           ? "Telegram profilingiz va oldingi ma'lumotlaringiz avtomatik to‘ldirildi."
           : "Ваш Telegram профиль и сохранённые данные заполнены автоматически."
       );
+
+      if (String(customer.address || "").trim()) {
+        router.replace("/profile");
+      }
 
       return;
     }
@@ -611,6 +620,34 @@ export default function AuthPage() {
       }
     });
   };
+
+  useEffect(() => {
+    const tg = getTelegramUserSafely();
+    if (!tg?.id) return;
+
+    let cancelled = false;
+
+    const loadCustomerFromTelegram = async () => {
+      const customer = await loadCustomerByTelegramId(Number(tg.id));
+
+      if (cancelled) return;
+      if (!customer) return;
+
+      applyTelegramUser(tg, true);
+      applyCustomerRowToForm(customer);
+      localStorage.setItem("marva-user", JSON.stringify(toLocalUser(customer)));
+
+      if (String(customer.address || "").trim()) {
+        router.replace("/profile");
+      }
+    };
+
+    void loadCustomerFromTelegram();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     const tg = getTelegramWebApp();
