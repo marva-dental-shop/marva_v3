@@ -75,6 +75,20 @@ function normalizePhoneForDb(phone = "") {
   return String(phone).replace(/[^\d+]/g, "").trim();
 }
 
+function getTelegramFullName(from) {
+  return `${from?.first_name || ""} ${from?.last_name || ""}`.trim();
+}
+
+function buildBaseUserData(msg) {
+  return {
+    telegramId: msg.from?.id || null,
+    telegramUsername: msg.from?.username ? `@${msg.from.username}` : "",
+    fullName: getTelegramFullName(msg.from),
+    phone: "",
+    address: "",
+  };
+}
+
 async function upsertCustomer(userData) {
   try {
     const payload = {
@@ -353,7 +367,14 @@ bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const existingUser = getUser(chatId);
 
-  if (existingUser) {
+  if (
+    existingUser &&
+    existingUser.phone &&
+    existingUser.fullName &&
+    existingUser.address
+  ) {
+    clearSession(chatId);
+
     await bot.sendMessage(
       chatId,
       "🦷 MARVA Dental shop botiga qaytganingiz bilan!",
@@ -364,24 +385,62 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
 
+  const sessionData = {
+    ...(existingUser || buildBaseUserData(msg)),
+    telegramId: msg.from?.id || existingUser?.telegramId || null,
+    telegramUsername: msg.from?.username
+      ? `@${msg.from.username}`
+      : existingUser?.telegramUsername || "",
+    fullName:
+      existingUser?.fullName || getTelegramFullName(msg.from) || "",
+    phone: existingUser?.phone || "",
+    address: existingUser?.address || "",
+  };
+
+  if (!sessionData.phone) {
+    setSession(chatId, {
+      step: "register_phone",
+      data: sessionData,
+    });
+
+    await bot.sendMessage(
+      chatId,
+      "🦷 MARVA Dental shop botiga xush kelibsiz!\n\nAvval telefon raqamingizni yuboring:",
+      {
+        reply_markup: getPhoneRequestKeyboard(),
+      }
+    );
+    return;
+  }
+
+  if (!sessionData.fullName) {
+    setSession(chatId, {
+      step: "register_full_name",
+      data: sessionData,
+    });
+
+    await bot.sendMessage(
+      chatId,
+      "✅ Telefon raqamingiz saqlandi.\n\nEndi ism-familyangizni yuboring:",
+      {
+        reply_markup: {
+          remove_keyboard: true,
+        },
+      }
+    );
+    return;
+  }
+
   setSession(chatId, {
-    step: "register_phone",
-    data: {
-      telegramId: msg.from?.id || null,
-      telegramUsername: msg.from?.username ? `@${msg.from.username}` : "",
-      fullName: "",
-      phone: "",
-      address: "",
-    },
+    step: "register_address",
+    data: sessionData,
   });
 
-  await bot.sendMessage(
-    chatId,
-    "🦷 MARVA Dental shop botiga xush kelibsiz!\n\nAvval telefon raqamingizni yuboring:",
-    {
-      reply_markup: getPhoneRequestKeyboard(),
-    }
-  );
+  await bot.sendMessage(chatId, "Manzilingizni yuboring:", {
+    reply_markup: {
+      remove_keyboard: true,
+    },
+  });
 });
 
 bot.on("message", async (msg) => {
@@ -409,7 +468,10 @@ bot.on("message", async (msg) => {
   if (session?.step === "register_phone") {
     const contact = msg.contact;
 
-    if (!contact || String(contact.user_id || "") !== String(msg.from?.id || "")) {
+    if (
+      !contact ||
+      String(contact.user_id || "") !== String(msg.from?.id || "")
+    ) {
       await bot.sendMessage(
         chatId,
         "📱 Telefon raqamingizni pastdagi tugma orqali yuboring:",
@@ -420,8 +482,7 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    const tgFullName =
-      `${msg.from?.first_name || ""} ${msg.from?.last_name || ""}`.trim();
+    const tgFullName = getTelegramFullName(msg.from);
 
     const nextData = {
       ...session.data,
