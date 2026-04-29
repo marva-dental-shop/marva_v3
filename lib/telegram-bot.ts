@@ -18,6 +18,15 @@ export type TelegramOrderPayload = {
   updatedStock?: number | null;
 };
 
+type TelegramReplyMarkup = {
+  inline_keyboard: Array<
+    Array<{
+      text: string;
+      callback_data: string;
+    }>
+  >;
+};
+
 function buildItemsText(items: TelegramOrderItem[]) {
   if (!items.length) return "Mahsulotlar yo‘q";
 
@@ -60,7 +69,7 @@ export async function telegramBot(
   return data;
 }
 
-function orderActionKeyboard(orderId: string) {
+function orderActionKeyboard(orderId: string): TelegramReplyMarkup {
   return {
     inline_keyboard: [
       [
@@ -87,16 +96,10 @@ function orderActionKeyboard(orderId: string) {
   };
 }
 
-export async function sendTelegramAdminOrder(params: TelegramOrderPayload) {
-  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-
-  if (!chatId) {
-    throw new Error("TELEGRAM_ADMIN_CHAT_ID topilmadi");
-  }
-
+function buildAdminOrderText(params: TelegramOrderPayload) {
   const itemsText = buildItemsText(params.items);
 
-  const text = [
+  return [
     "🦷 Yangi buyurtma",
     "",
     `Order ID: #${params.orderId}`,
@@ -118,10 +121,37 @@ export async function sendTelegramAdminOrder(params: TelegramOrderPayload) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export async function sendTelegramAdminOrder(params: TelegramOrderPayload) {
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+
+  if (!chatId) {
+    throw new Error("TELEGRAM_ADMIN_CHAT_ID topilmadi");
+  }
+
+  const text = buildAdminOrderText(params);
 
   return telegramBot("sendMessage", {
     chat_id: chatId,
     text,
     reply_markup: orderActionKeyboard(params.orderId),
+  });
+}
+
+export async function sendTelegramCourierMessage(params: {
+  text: string;
+  reply_markup?: TelegramReplyMarkup;
+}) {
+  const courierChatId = process.env.TELEGRAM_COURIER_GROUP_CHAT_ID;
+
+  if (!courierChatId) {
+    throw new Error("TELEGRAM_COURIER_GROUP_CHAT_ID topilmadi");
+  }
+
+  return telegramBot("sendMessage", {
+    chat_id: courierChatId,
+    text: params.text,
+    ...(params.reply_markup ? { reply_markup: params.reply_markup } : {}),
   });
 }

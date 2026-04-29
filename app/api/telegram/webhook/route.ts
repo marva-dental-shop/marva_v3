@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { telegramBot } from "@/lib/telegram-bot";
+import {
+  telegramBot,
+  sendTelegramCourierMessage,
+} from "@/lib/telegram-bot";
 import { supabaseServer } from "@/lib/supabase-server";
 import { type BotLang, getText } from "@/lib/bot-texts";
 import {
@@ -231,6 +234,63 @@ async function sendLanguagePicker(chatId: number, lang: BotLang) {
   });
 }
 
+function courierInitialKeyboard(orderId: number) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "✅ Qabul qildim",
+          callback_data: `order:courier_accept:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "🚚 Yo'ldaman",
+          callback_data: `order:courier_ontheway:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "📦 Yetkazdim",
+          callback_data: `order:courier_delivered:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
+
+function courierAcceptedKeyboard(orderId: number) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "🚚 Yo'ldaman",
+          callback_data: `order:courier_ontheway:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "📦 Yetkazdim",
+          callback_data: `order:courier_delivered:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
+
+function courierOnTheWayKeyboard(orderId: number) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "📦 Yetkazdim",
+          callback_data: `order:courier_delivered:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
+
 async function handleOrderAction(params: {
   callback: any;
   chatId: number;
@@ -266,6 +326,20 @@ async function handleOrderAction(params: {
   }
 
   if (action === "courier") {
+    const originalMessageText = String(callback.message?.text || "").trim();
+
+    if (!originalMessageText) {
+      await sendTelegram("answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: "Buyurtma matni topilmadi",
+      });
+
+      return NextResponse.json({
+        ok: false,
+        message: "Buyurtma matni topilmadi",
+      });
+    }
+
     const { error } = await supabaseServer
       .from("orders")
       .update({
@@ -282,14 +356,19 @@ async function handleOrderAction(params: {
       return NextResponse.json({ ok: false, message: error.message });
     }
 
+    await sendTelegramCourierMessage({
+      text: originalMessageText,
+      reply_markup: courierInitialKeyboard(orderId),
+    });
+
     await sendTelegram("answerCallbackQuery", {
       callback_query_id: callback.id,
-      text: `🚚 Buyurtma #${orderId} kuryerga berildi`,
+      text: `🚚 Buyurtma #${orderId} kuryer guruhiga yuborildi`,
     });
 
     await sendTelegram("sendMessage", {
       chat_id: chatId,
-      text: `🚚 Buyurtma #${orderId} kuryerga berildi`,
+      text: `🚚 Buyurtma #${orderId} kuryer guruhiga yuborildi`,
     });
 
     if (messageId) {
@@ -315,6 +394,123 @@ async function handleOrderAction(params: {
               },
             ],
           ],
+        },
+      });
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "courier_accept") {
+    const { error } = await supabaseServer
+      .from("orders")
+      .update({
+        delivery_status: "Kuryer qabul qildi",
+      })
+      .eq("id", orderId);
+
+    if (error) {
+      await sendTelegram("answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: error.message,
+      });
+
+      return NextResponse.json({ ok: false, message: error.message });
+    }
+
+    await sendTelegram("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: `✅ Buyurtma #${orderId} qabul qilindi`,
+    });
+
+    await sendTelegram("sendMessage", {
+      chat_id: chatId,
+      text: `✅ Buyurtma #${orderId} qabul qilindi`,
+    });
+
+    if (messageId) {
+      await sendTelegram("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: courierAcceptedKeyboard(orderId),
+      });
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "courier_ontheway") {
+    const { error } = await supabaseServer
+      .from("orders")
+      .update({
+        delivery_status: "Yo'lda",
+      })
+      .eq("id", orderId);
+
+    if (error) {
+      await sendTelegram("answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: error.message,
+      });
+
+      return NextResponse.json({ ok: false, message: error.message });
+    }
+
+    await sendTelegram("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: `🚚 Buyurtma #${orderId} yo'lda`,
+    });
+
+    await sendTelegram("sendMessage", {
+      chat_id: chatId,
+      text: `🚚 Buyurtma #${orderId} yo'lda`,
+    });
+
+    if (messageId) {
+      await sendTelegram("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: courierOnTheWayKeyboard(orderId),
+      });
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "courier_delivered") {
+    const { error } = await supabaseServer
+      .from("orders")
+      .update({
+        order_status: "Tugallandi",
+        delivery_status: "Yetkazildi",
+      })
+      .eq("id", orderId);
+
+    if (error) {
+      await sendTelegram("answerCallbackQuery", {
+        callback_query_id: callback.id,
+        text: error.message,
+      });
+
+      return NextResponse.json({ ok: false, message: error.message });
+    }
+
+    await sendTelegram("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: `📦 Buyurtma #${orderId} yetkazildi`,
+    });
+
+    await sendTelegram("sendMessage", {
+      chat_id: chatId,
+      text: `📦 Buyurtma #${orderId} yetkazildi`,
+    });
+
+    if (messageId) {
+      await sendTelegram("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: {
+          inline_keyboard: [],
         },
       });
     }
