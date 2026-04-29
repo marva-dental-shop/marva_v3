@@ -70,6 +70,7 @@ function saveUser(chatId, userData) {
   store.users[String(chatId)] = userData;
   writeStore(store);
 }
+
 function normalizePhoneForDb(phone = "") {
   return String(phone).replace(/[^\d+]/g, "").trim();
 }
@@ -85,7 +86,6 @@ async function upsertCustomer(userData) {
       source: "bot",
     };
 
-    // 1) Avval telegram_id bo'yicha
     if (payload.telegram_id) {
       const { data, error } = await supabase
         .from("customers")
@@ -101,7 +101,6 @@ async function upsertCustomer(userData) {
       return data;
     }
 
-    // 2) Telegram ID bo'lmasa phone bo'yicha
     if (payload.phone) {
       const { data: existingByPhone } = await supabase
         .from("customers")
@@ -366,7 +365,7 @@ bot.onText(/\/start/, async (msg) => {
   }
 
   setSession(chatId, {
-    step: "register_full_name",
+    step: "register_phone",
     data: {
       telegramId: msg.from?.id || null,
       telegramUsername: msg.from?.username ? `@${msg.from.username}` : "",
@@ -378,7 +377,10 @@ bot.onText(/\/start/, async (msg) => {
 
   await bot.sendMessage(
     chatId,
-    "🦷 MARVA Dental shop botiga xush kelibsiz!\n\nAvval ro‘yxatdan o‘tamiz.\n\nIsm-familyangizni yuboring:"
+    "🦷 MARVA Dental shop botiga xush kelibsiz!\n\nAvval telefon raqamingizni yuboring:",
+    {
+      reply_markup: getPhoneRequestKeyboard(),
+    }
   );
 });
 
@@ -404,34 +406,13 @@ bot.on("message", async (msg) => {
     clearSession(chatId);
   }
 
-  if (session?.step === "register_full_name") {
-    const nextData = {
-      ...session.data,
-      fullName: (text || "").trim(),
-    };
-
-    setSession(chatId, {
-      step: "register_phone",
-      data: nextData,
-    });
-
-    await bot.sendMessage(
-      chatId,
-      "Telefon raqamingizni tugma orqali yuboring:",
-      {
-        reply_markup: getPhoneRequestKeyboard(),
-      }
-    );
-    return;
-  }
-
   if (session?.step === "register_phone") {
     const contact = msg.contact;
 
     if (!contact || String(contact.user_id || "") !== String(msg.from?.id || "")) {
       await bot.sendMessage(
         chatId,
-        "Pastdagi 📱 tugmani bosing va telefon raqamingizni yuboring.",
+        "📱 Telefon raqamingizni pastdagi tugma orqali yuboring:",
         {
           reply_markup: getPhoneRequestKeyboard(),
         }
@@ -439,9 +420,39 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    const tgFullName =
+      `${msg.from?.first_name || ""} ${msg.from?.last_name || ""}`.trim();
+
     const nextData = {
       ...session.data,
       phone: contact.phone_number || "",
+      fullName: session.data.fullName || tgFullName || "",
+    };
+
+    saveUser(chatId, nextData);
+    await upsertCustomer(nextData);
+
+    setSession(chatId, {
+      step: "register_full_name",
+      data: nextData,
+    });
+
+    await bot.sendMessage(
+      chatId,
+      "✅ Telefon raqamingiz saqlandi.\n\nEndi ism-familyangizni yuboring:",
+      {
+        reply_markup: {
+          remove_keyboard: true,
+        },
+      }
+    );
+    return;
+  }
+
+  if (session?.step === "register_full_name") {
+    const nextData = {
+      ...session.data,
+      fullName: (text || "").trim() || session.data.fullName || "",
     };
 
     setSession(chatId, {
@@ -449,50 +460,46 @@ bot.on("message", async (msg) => {
       data: nextData,
     });
 
-    await bot.sendMessage(chatId, "Manzilingizni yuboring:", {
-      reply_markup: {
-        remove_keyboard: true,
-      },
-    });
+    await bot.sendMessage(chatId, "Manzilingizni yuboring:");
     return;
   }
 
   if (session?.step === "register_address") {
-  const finalUser = {
-    ...session.data,
-    address: (text || "").trim(),
-    createdAt: new Date().toISOString(),
-  };
+    const finalUser = {
+      ...session.data,
+      address: (text || "").trim(),
+      createdAt: new Date().toISOString(),
+    };
 
-  const customer = await upsertCustomer(finalUser);
+    const customer = await upsertCustomer(finalUser);
 
-  saveUser(chatId, {
-    ...finalUser,
-    customerId: customer?.id || null,
-  });
+    saveUser(chatId, {
+      ...finalUser,
+      customerId: customer?.id || null,
+    });
 
-  clearSession(chatId);
+    clearSession(chatId);
 
-  await bot.sendMessage(
-    chatId,
-    "✅ Ro‘yxatdan o‘tdingiz. Endi menyudan foydalanishingiz mumkin.",
-    {
-      reply_markup: getMainMenuReplyMarkup(),
-    }
-  );
+    await bot.sendMessage(
+      chatId,
+      "✅ Ro‘yxatdan o‘tdingiz. Endi menyudan foydalanishingiz mumkin.",
+      {
+        reply_markup: getMainMenuReplyMarkup(),
+      }
+    );
 
-  await sendAdminMessage(
-    `🆕 Yangi bot user ro‘yxatdan o‘tdi\n\n` +
-      `👤 ${finalUser.fullName}\n` +
-      `📞 ${finalUser.phone}\n` +
-      `📍 ${finalUser.address}\n` +
-      `🆔 Telegram ID: ${finalUser.telegramId || "yo‘q"}\n` +
-      `📨 Username: ${finalUser.telegramUsername || "yo‘q"}\n` +
-      `🗂 Customer ID: ${customer?.id || "saqlanmadi"}`
-  );
+    await sendAdminMessage(
+      `🆕 Yangi bot user ro‘yxatdan o‘tdi\n\n` +
+        `👤 ${finalUser.fullName}\n` +
+        `📞 ${finalUser.phone}\n` +
+        `📍 ${finalUser.address}\n` +
+        `🆔 Telegram ID: ${finalUser.telegramId || "yo‘q"}\n` +
+        `📨 Username: ${finalUser.telegramUsername || "yo‘q"}\n` +
+        `🗂 Customer ID: ${customer?.id || "saqlanmadi"}`
+    );
 
-  return;
-}
+    return;
+  }
 
   if (session?.step === "product_info_name") {
     const queryText = (text || "").trim();
@@ -748,7 +755,6 @@ bot.on("callback_query", async (query) => {
 
   if (!chatId || !messageId) return;
 
-  // Disabled tugmalar uchun
   if (data.startsWith("done:")) {
     try {
       await bot.answerCallbackQuery(query.id, {
@@ -772,7 +778,6 @@ bot.on("callback_query", async (query) => {
 
   let statusPayload = {};
   let statusLabel = "";
-  let customerMessage = "";
   let newKeyboard = [];
 
   if (action === "accept") {
@@ -785,8 +790,6 @@ bot.on("callback_query", async (query) => {
     };
 
     statusLabel = "✅ Kuryer qabul qildi";
-    customerMessage =
-      "📦 Buyurtmangiz kuryerga topshirildi. Tez orada yo‘lga chiqadi.";
 
     newKeyboard = [
       [{ text: "✅ Qabul qilindi", callback_data: `done:accept:${orderId}` }],
@@ -803,8 +806,6 @@ bot.on("callback_query", async (query) => {
     };
 
     statusLabel = "🚚 Kuryer yo'lda";
-    customerMessage =
-      "🚚 Buyurtmangiz yo‘lda. Kuryer siz bilan bog‘lanadi.";
 
     newKeyboard = [
       [{ text: "✅ Qabul qilindi", callback_data: `done:accept:${orderId}` }],
@@ -821,8 +822,6 @@ bot.on("callback_query", async (query) => {
     };
 
     statusLabel = "📦 Yetkazib berildi!";
-    customerMessage =
-      "✅ Buyurtmangiz muvaffaqiyatli yetkazildi. Xaridingiz uchun rahmat.";
 
     newKeyboard = [
       [{ text: "✅ Qabul qilindi", callback_data: `done:accept:${orderId}` }],
