@@ -139,6 +139,15 @@ function getChatId(update: any): number | null {
   );
 }
 
+function isPrivateUpdate(update: any) {
+  const chatType =
+    update?.message?.chat?.type ||
+    update?.callback_query?.message?.chat?.type ||
+    null;
+
+  return chatType === "private";
+}
+
 function getResolvedLang(update: any): BotLang {
   const chatId = getChatId(update);
 
@@ -355,6 +364,12 @@ async function handleOrderAction(params: {
 
       return NextResponse.json({ ok: false, message: error.message });
     }
+
+    console.log("COURIER_FORWARD_DEBUG", {
+      orderId,
+      courierChatId: process.env.TELEGRAM_COURIER_GROUP_CHAT_ID,
+      originalMessageText,
+    });
 
     await sendTelegramCourierMessage({
       text: originalMessageText,
@@ -645,6 +660,10 @@ export async function POST(req: NextRequest) {
     const callback = update?.callback_query;
 
     if (message?.text === "/start") {
+      if (!isPrivateUpdate(update)) {
+        return NextResponse.json({ ok: true });
+      }
+
       const chatId = message.chat.id;
       const lang = getResolvedLang(update);
 
@@ -658,6 +677,12 @@ export async function POST(req: NextRequest) {
       const messageId = callback.message?.message_id;
 
       if (!chatId) {
+        return NextResponse.json({ ok: true });
+      }
+
+      const isPrivateChat = isPrivateUpdate(update);
+
+      if (!isPrivateChat && !data.startsWith("order:")) {
         return NextResponse.json({ ok: true });
       }
 
@@ -752,6 +777,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (message?.text) {
+      if (!isPrivateUpdate(update)) {
+        return NextResponse.json({ ok: true });
+      }
+
       const chatId = message.chat.id;
       const lang = getResolvedLang(update);
       const text = String(message.text);
