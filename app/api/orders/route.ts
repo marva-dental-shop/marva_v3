@@ -1,0 +1,312 @@
+import { NextResponse } from "next/server";
+import { sendTelegramAdminOrder, telegramBot } from "@/lib/telegram-bot";
+
+export const runtime = "nodejs";
+
+type OrderItem = {
+  product_name?: string;
+  product_description?: string;
+  product_number?: string | number;
+  quantity?: number;
+  price?: number | string;
+  product_id?: string | number;
+  moysklad_product_id?: string | null;
+};
+
+type OrderRequestBody = {
+  orderId?: string | number;
+  fullName?: string;
+  phone?: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  note?: string;
+  totalAmount?: number | string;
+  items?: unknown;
+};
+
+type TelegramOrderPayload = {
+  orderId: string;
+  fullName?: string;
+  phone?: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  note?: string;
+  totalAmount?: number | string;
+  items: OrderItem[];
+  moyskladOrderName?: string;
+  updatedStock?: number | null;
+};
+
+const MOYSKLAD_BASE =
+  process.env.MOYSKLAD_BASE_URL || "https://api.moysklad.ru/api/remap/1.2";
+
+const MOYSKLAD_TOKEN = process.env.MOYSKLAD_TOKEN;
+
+function normalizeItems(items: unknown): OrderItem[] {
+  return Array.isArray(items) ? (items as OrderItem[]) : [];
+}
+
+function getMoyskladHeaders() {
+  if (!MOYSKLAD_TOKEN) {
+    throw new Error("MOYSKLAD_TOKEN topilmadi");
+  }
+
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${MOYSKLAD_TOKEN}`,
+  };
+}
+
+function attachMoyskladIds(items: OrderItem[]): OrderItem[] {
+  const map: Record<string, string> = {
+    "Щипцы шт": "0001b99a-6ab6-11ef-0a80-16860010bc6c",
+    "Плоток резина": "0012bd18-7765-11f0-0a80-11c8000be6fa",
+    "ZR PFZ CHD A1 10g": "009b7b44-a172-11ee-0a80-064000333dd0",
+    "Мегадез 3Л": "01025e06-b46a-11ef-0a80-08280019d9c4",
+  };
+
+  return items.map((item) => ({
+    ...item,
+    moysklad_product_id:
+      item.moysklad_product_id || map[item.product_name || ""] || null,
+  }));
+}
+
+function buildMoyskladPositions(items: OrderItem[]) {
+  return items
+    .filter(
+      (item) => item.moysklad_product_id && Number(item.quantity || 0) > 0
+    )
+    .map((item) => ({
+      quantity: Number(item.quantity || 0),
+      price: Math.round(Number(item.price || 0) * 100),
+      assortment: {
+        meta: {
+          href: `${MOYSKLAD_BASE}/entity/product/${item.moysklad_product_id}`,
+          type: "product",
+          mediaType: "application/json",
+        },
+      },
+    }));
+}
+
+async function createMoyskladOrder(params: {
+  orderId: string;
+  fullName?: string;
+  phone?: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  note?: string;
+  items: OrderItem[];
+}) {
+  const positions = buildMoyskladPositions(params.items);
+
+  if (!positions.length) {
+    throw new Error("MoySklad positions topilmadi");
+  }
+
+  const payload = {
+    name: `TG-${params.orderId}`,
+    description: [
+      `Telegram/Web order: #${params.orderId}`,
+      `Mijoz: ${params.fullName || "-"}`,
+      `Telefon: ${params.phone || "-"}`,
+      `Manzil: ${params.address || "-"}`,
+      `Izoh: ${params.note || "-"}`,
+    ].join("\n"),
+    positions,
+  };
+
+  const res = await fetch(`${MOYSKLAD_BASE}/entity/customerorder`, {
+    method: "POST",
+    headers: getMoyskladHeaders(),
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MoySklad order yaratishda xato: ${text}`);
+  }
+
+  return res.json();
+}
+
+function buildTelegramOrderText(params: TelegramOrderPayload) {
+  const itemsText =
+    params.items.length > 0
+      ? params.items
+          .map((item, index) => {
+            const name = item.product_name || "Noma’lum mahsulot";
+            const description = item.product_description || "";
+            const quantity = Number(item.quantity || 0);
+            const price = item.price ?? "-";
+
+            return [
+              `${index + 1}. ${name}`,
+              description ? `   Mahsulot haqida: ${description}` : null,
+              `   Soni: ${quantity} dona`,
+              `   Narxi: ${price}`,
+            ]
+              .filter(Boolean)
+              .join("\n");
+          })
+          .join("\n\n")
+      : "Mahsulotlar yo‘q";
+
+  return [
+    "🆕 Order notification",
+    `Order ID: #${params.orderId}`,
+    `Client: ${params.fullName || "-"}`,
+    `Phone: ${params.phone || "-"}`,
+    `Address: ${params.address || "-"}`,
+    `Note: ${params.note || "-"}`,
+    `Total: ${params.totalAmount ?? "-"}`,
+    `Order status: Yangi`,
+    `Delivery status: Dastavka biriktirilmagan`,
+    "",
+    "Mahsulotlar:",
+    itemsText,
+    "",
+    params.moyskladOrderName
+      ? `MoySklad: ${params.moyskladOrderName}`
+      : "MoySklad: sync skipped",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function orderActionKeyboard(orderId: string) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "💾 Saqlash",
+          callback_data: `order:save:${orderId}`,
+        },
+        {
+          text: "🚚 Kuryerga berish",
+          callback_data: `order:courier:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "✅ Yetkazildi",
+          callback_data: `order:delivered:${orderId}`,
+        },
+        {
+          text: "🗑 O‘chirish",
+          callback_data: `order:delete:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
+
+async function sendTelegramGroupOrder(params: TelegramOrderPayload) {
+  const groupChatId = process.env.TELEGRAM_GROUP_CHAT_ID;
+
+  if (!groupChatId) {
+    throw new Error("TELEGRAM_GROUP_CHAT_ID topilmadi");
+  }
+
+  await telegramBot("sendMessage", {
+    chat_id: groupChatId,
+    text: buildTelegramOrderText(params),
+    reply_markup: orderActionKeyboard(params.orderId),
+  });
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json()) as OrderRequestBody;
+
+    const {
+      orderId,
+      fullName,
+      phone,
+      address,
+      latitude,
+      longitude,
+      note,
+      totalAmount,
+      items,
+    } = body ?? {};
+
+    if (!orderId) {
+      return NextResponse.json(
+        { success: false, message: "orderId topilmadi" },
+        { status: 400 }
+      );
+    }
+
+    const rawItems = normalizeItems(items);
+
+    if (!rawItems.length) {
+      return NextResponse.json(
+        { success: false, message: "Mahsulotlar yo‘q" },
+        { status: 400 }
+      );
+    }
+
+    const safeItems = attachMoyskladIds(rawItems);
+
+    const telegramPayload: TelegramOrderPayload = {
+      orderId: String(orderId),
+      fullName,
+      phone,
+      address,
+      latitude,
+      longitude,
+      note,
+      totalAmount,
+      items: safeItems,
+      moyskladOrderName: "",
+      updatedStock: null,
+    };
+
+    await sendTelegramAdminOrder(telegramPayload);
+    await sendTelegramGroupOrder(telegramPayload);
+
+    let moyskladOrderName = "";
+    let moyskladError: string | null = null;
+
+    try {
+      const moyskladOrder = await createMoyskladOrder({
+        orderId: String(orderId),
+        fullName,
+        phone,
+        address,
+        latitude,
+        longitude,
+        note,
+        items: safeItems,
+      });
+
+      moyskladOrderName = moyskladOrder?.name || moyskladOrder?.id || "-";
+    } catch (error: any) {
+      moyskladError = error?.message || "MoySklad sync error";
+      console.error("MOYSKLAD_SYNC_ERROR:", moyskladError);
+    }
+
+    return NextResponse.json({
+      success: true,
+      moyskladOrderName,
+      moyskladError,
+      items: safeItems,
+    });
+  } catch (error: any) {
+    console.error("orders route error:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error?.message || "Server xatosi",
+      },
+      { status: 500 }
+    );
+  }
+}

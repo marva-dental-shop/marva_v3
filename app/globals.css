@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #f7faf9;
+  --foreground: #10312c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  background: #f7faf9;
+}
+
+#__next {
+  min-height: 100dvh;
+}
+
+@supports (height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
