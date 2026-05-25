@@ -43,6 +43,81 @@ function getTelegramUserId(update: any): number | null {
   return update?.message?.from?.id || update?.callback_query?.from?.id || null;
 }
 
+function getTelegramFullName(from: any) {
+  return `${from?.first_name || ""} ${from?.last_name || ""}`.trim() || "Mijoz";
+}
+
+function normalizePhone(phone = "") {
+  return String(phone).replace(/[^\d+]/g, "").trim();
+}
+
+function registerContactKeyboard() {
+  return {
+    keyboard: [[{ text: "📱 Ro‘yxatdan o‘tish", request_contact: true }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  };
+}
+
+function miniAppKeyboard() {
+  const webAppUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || process.env.APP_BASE_URL;
+
+  const miniAppButton =
+    webAppUrl && webAppUrl.startsWith("https://")
+      ? { text: "🛍 Mini App", web_app: { url: webAppUrl } }
+      : { text: "🛍 Mini App" };
+
+  return {
+    keyboard: [
+      [miniAppButton],
+      [{ text: "📦 Buyurtmalarim" }, { text: "☎️ Operator bilan bog‘lanish" }],
+      [{ text: "🌐 Til" }],
+    ],
+    resize_keyboard: true,
+  };
+}
+
+async function getCustomerByTelegramId(telegramId: number) {
+  const { data, error } = await supabaseServer
+    .from("customers")
+    .select("id, full_name, telegram_id, phone")
+    .eq("telegram_id", telegramId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("GET_CUSTOMER_ERROR", error.message);
+    return null;
+  }
+
+  return data as DbCustomer | null;
+}
+
+async function upsertCustomerFromContact(message: any) {
+  const contact = message.contact;
+  const from = message.from;
+
+  const payload = {
+    telegram_id: Number(from?.id),
+    telegram_username: from?.username ? `@${from.username}` : null,
+    full_name: getTelegramFullName(from),
+    phone: normalizePhone(contact?.phone_number || ""),
+    source: "telegram_webhook",
+  };
+
+  const { data, error } = await supabaseServer
+    .from("customers")
+    .upsert(payload, { onConflict: "telegram_id" })
+    .select("id, full_name, telegram_id, phone")
+    .single();
+
+  if (error) {
+    console.error("CUSTOMER_UPSERT_ERROR", error.message);
+    throw new Error(error.message);
+  }
+
+  return data as DbCustomer;
+}
+
 async function getCustomerOrdersByTelegramUser(telegramUserId: number) {
   const { data: customer, error: customerError } = await supabaseServer
     .from("customers")
@@ -165,21 +240,24 @@ function setResolvedLang(chatId: number, lang: BotLang) {
 function resolveMenuAction(text: string): MenuAction {
   if (
     text === getText("uz", "products") ||
-    text === getText("ru", "products")
+    text === getText("ru", "products") ||
+    text === "🛍 Mini App"
   ) {
     return "products";
   }
 
   if (
     text === getText("uz", "myOrders") ||
-    text === getText("ru", "myOrders")
+    text === getText("ru", "myOrders") ||
+    text === "📦 Buyurtmalarim"
   ) {
     return "myOrders";
   }
 
   if (
     text === getText("uz", "callOperator") ||
-    text === getText("ru", "callOperator")
+    text === getText("ru", "callOperator") ||
+    text === "☎️ Operator bilan bog‘lanish"
   ) {
     return "callOperator";
   }
@@ -190,7 +268,8 @@ function resolveMenuAction(text: string): MenuAction {
 
   if (
     text === getText("uz", "language") ||
-    text === getText("ru", "language")
+    text === getText("ru", "language") ||
+    text === "🌐 Til"
   ) {
     return "language";
   }
@@ -209,6 +288,7 @@ function logIncomingUpdate(update: any) {
     chat_id: getChatId(update),
     user_id: update?.message?.from?.id || update?.callback_query?.from?.id,
     text: update?.message?.text || null,
+    contact: update?.message?.contact ? true : false,
     callback_data: update?.callback_query?.data || null,
     ts: new Date().toISOString(),
   });
@@ -227,6 +307,27 @@ async function sendTelegram(method: string, payload: Record<string, any>) {
   return telegramBot(method, payload);
 }
 
+async function sendAdminRegistrationMessage(customer: DbCustomer, message: any) {
+  const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID;
+
+  if (!adminChatId) return;
+
+  try {
+    await sendTelegram("sendMessage", {
+      chat_id: adminChatId,
+      text:
+        `🆕 Yangi user ro‘yxatdan o‘tdi\n\n` +
+        `👤 ${customer.full_name || "Mijoz"}\n` +
+        `📞 ${customer.phone || "yo‘q"}\n` +
+        `🆔 Telegram ID: ${message.from?.id || "yo‘q"}\n` +
+        `📨 Username: ${message.from?.username ? `@${message.from.username}` : "yo‘q"}\n` +
+        `🗂 Customer ID: ${customer.id}`,
+    });
+  } catch (error: any) {
+    console.error("ADMIN_REGISTRATION_MESSAGE_ERROR", error?.message || error);
+  }
+}
+
 async function sendMainMenu(chatId: number, lang: BotLang) {
   await sendTelegram("sendMessage", {
     chat_id: chatId,
@@ -240,6 +341,26 @@ async function sendLanguagePicker(chatId: number, lang: BotLang) {
     chat_id: chatId,
     text: getText(lang, "chooseLanguage"),
     reply_markup: languageKeyboard(),
+  });
+}
+
+async function sendRegisterMessage(chatId: number) {
+  await sendTelegram("sendMessage", {
+    chat_id: chatId,
+    text:
+      "🦷 MARVA Dental shop botiga xush kelibsiz!\n\n" +
+      "Mini App’dan foydalanish uchun avval bitta tugma orqali ro‘yxatdan o‘ting:",
+    reply_markup: registerContactKeyboard(),
+  });
+}
+
+async function sendRegisteredMenu(chatId: number) {
+  await sendTelegram("sendMessage", {
+    chat_id: chatId,
+    text:
+      "🦷 MARVA Dental shop botiga xush kelibsiz!\n\n" +
+      "Siz ro‘yxatdan o‘tgansiz. Mini App’dan foydalanishingiz mumkin.",
+    reply_markup: miniAppKeyboard(),
   });
 }
 
@@ -364,12 +485,6 @@ async function handleOrderAction(params: {
 
       return NextResponse.json({ ok: false, message: error.message });
     }
-
-    console.log("COURIER_FORWARD_DEBUG", {
-      orderId,
-      courierChatId: process.env.TELEGRAM_COURIER_GROUP_CHAT_ID,
-      originalMessageText,
-    });
 
     await sendTelegramCourierMessage({
       text: originalMessageText,
@@ -641,11 +756,6 @@ export async function POST(req: NextRequest) {
 
     if (typeof update?.update_id === "number") {
       if (processedUpdates.has(update.update_id)) {
-        console.log("DUPLICATE_UPDATE_SKIPPED", {
-          update_id: update.update_id,
-          ts: new Date().toISOString(),
-        });
-
         return NextResponse.json({ ok: true });
       }
 
@@ -659,15 +769,60 @@ export async function POST(req: NextRequest) {
     const message = update?.message;
     const callback = update?.callback_query;
 
+    if (message?.contact) {
+      if (!isPrivateUpdate(update)) {
+        return NextResponse.json({ ok: true });
+      }
+
+      const chatId = message.chat.id;
+      const contactUserId = String(message.contact?.user_id || "");
+      const fromUserId = String(message.from?.id || "");
+
+      if (!contactUserId || contactUserId !== fromUserId) {
+        await sendTelegram("sendMessage", {
+          chat_id: chatId,
+          text:
+            "📱 Iltimos, ro‘yxatdan o‘tish uchun o‘zingizning telefon raqamingizni pastdagi tugma orqali yuboring.",
+          reply_markup: registerContactKeyboard(),
+        });
+
+        return NextResponse.json({ ok: true });
+      }
+
+      const customer = await upsertCustomerFromContact(message);
+      await sendAdminRegistrationMessage(customer, message);
+
+      await sendTelegram("sendMessage", {
+        chat_id: chatId,
+        text:
+          `✅ Ro‘yxatdan o‘tdingiz.\n\n` +
+          `👤 ${customer.full_name || "Mijoz"}\n` +
+          `📞 ${customer.phone || ""}\n\n` +
+          `Endi Mini App’dan foydalanishingiz mumkin.`,
+        reply_markup: miniAppKeyboard(),
+      });
+
+      return NextResponse.json({ ok: true });
+    }
+
     if (message?.text === "/start") {
       if (!isPrivateUpdate(update)) {
         return NextResponse.json({ ok: true });
       }
 
       const chatId = message.chat.id;
-      const lang = getResolvedLang(update);
+      const telegramId = message.from?.id;
 
-      await sendLanguagePicker(chatId, lang);
+      if (telegramId) {
+        const existingCustomer = await getCustomerByTelegramId(Number(telegramId));
+
+        if (existingCustomer?.phone) {
+          await sendRegisteredMenu(chatId);
+          return NextResponse.json({ ok: true });
+        }
+      }
+
+      await sendRegisterMessage(chatId);
       return NextResponse.json({ ok: true });
     }
 
@@ -782,11 +937,36 @@ export async function POST(req: NextRequest) {
       }
 
       const chatId = message.chat.id;
+      const telegramId = message.from?.id;
+
+      if (telegramId) {
+        const existingCustomer = await getCustomerByTelegramId(Number(telegramId));
+
+        if (!existingCustomer?.phone) {
+          await sendRegisterMessage(chatId);
+          return NextResponse.json({ ok: true });
+        }
+      }
+
       const lang = getResolvedLang(update);
       const text = String(message.text);
       const action = resolveMenuAction(text);
 
       if (action === "products") {
+        const webAppUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || process.env.APP_BASE_URL;
+
+        if (webAppUrl && webAppUrl.startsWith("https://")) {
+          await sendTelegram("sendMessage", {
+            chat_id: chatId,
+            text: "🛍 Mini App orqali mahsulotlarni ko‘ring:",
+            reply_markup: {
+              inline_keyboard: [[{ text: "🛍 Mini Appni ochish", web_app: { url: webAppUrl } }]],
+            },
+          });
+
+          return NextResponse.json({ ok: true });
+        }
+
         await sendTelegram("sendMessage", {
           chat_id: chatId,
           text: getText(lang, "products"),
@@ -821,8 +1001,8 @@ export async function POST(req: NextRequest) {
             chat_id: chatId,
             text:
               lang === "uz"
-                ? "Profil topilmadi. Avval Mini App ichida profilingizni to‘ldiring va buyurtma bering."
-                : "Профиль не найден. Сначала заполните профиль в Mini App и оформите заказ.",
+                ? "Profil topilmadi. Avval /start orqali ro‘yxatdan o‘ting."
+                : "Профиль не найден. Сначала зарегистрируйтесь через /start.",
             reply_markup: backInlineKeyboard(lang),
           });
 
@@ -877,7 +1057,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      await sendMainMenu(chatId, lang);
+      await sendRegisteredMenu(chatId);
       return NextResponse.json({ ok: true });
     }
 
@@ -897,4 +1077,12 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "telegram-webhook",
+    message: "Telegram webhook faqat POST update uchun ishlaydi.",
+  });
 }

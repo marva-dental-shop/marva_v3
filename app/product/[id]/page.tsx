@@ -51,11 +51,13 @@ export default async function ProductDetailPage({
   const backHref = getBackHrefFromReferer(referer);
 
   const { data: product, error } = await supabase
-    .from("products")
-    .select("*")
-    .eq("id", Number(id))
-    .eq("is_active", true)
-    .single();
+  .from("products")
+  .select("*")
+  .eq("id", id)
+  .eq("is_active", true)
+  .gt("price", 0)
+  .gt("stock", 0)
+  .single();
 
   if (error || !product) return notFound();
 

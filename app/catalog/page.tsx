@@ -38,14 +38,15 @@ async function getProducts(
 
   let query = supabase
     .from("products")
-    .select(
-      "id, external_id, name, price, old_price, images, image_url, use_category, stock, is_featured, category_id, description",
-      { count: "exact" }
-    )
-    .eq("is_active", true)
-    .gt("stock", 0)
-    .order("id", { ascending: false })
-    .range(from, to);
+.select(
+  "id, external_id, name, price, old_price, images, image_url, use_category, stock, is_featured, category_id, description",
+  { count: "exact" }
+)
+.eq("is_active", true)
+.gt("price", 0)
+.gt("stock", 0)
+.order("id", { ascending: false })
+.range(from, to);
 
   if (useCategory !== "all") {
     query = query.eq("use_category", useCategory);

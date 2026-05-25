@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/moysklad/sync-products?secret=9f4c2d7a1b8e6c3d5f0a9e1c7b2d4f6a8c1e3b5d7a9c2e4f6b8d1a3c5e7f9b2",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/moysklad/sync-stock?pages=1&secret=9f4c2d7a1b8e6c3d5f0a9e1c7b2d4f6a8c1e3b5d7a9c2e4f6b8d1a3c5e7f9b2",
+      "schedule": "20 20 * * *"
+    },
+    {
+      "path": "/api/moysklad/sync-images?limit=50&secret=9f4c2d7a1b8e6c3d5f0a9e1c7b2d4f6a8c1e3b5d7a9c2e4f6b8d1a3c5e7f9b2",
+      "schedule": "40 20 * * *"
+    }
+  ]
+}
